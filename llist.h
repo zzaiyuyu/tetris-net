@@ -19,14 +19,12 @@ public:
 		pHead = new Node(0);
 	}
 	void push(int sock){
-		Node* pCur = pHead;
-		while(pCur->next){
-			pCur = pCur->next;
-		}	
-		pCur->next = new Node(sock);
+		Node* pNew = new Node(sock);
+		pNew->next = pHead->next; 		
+		pHead->next = pNew;
 	}	
 	void del(int sock){
-		Node* pCur = pHead;
+		Node* pCur = pHead->next;
 		Node* pPre = pHead;
 		while(pCur && pCur->sock != sock){
 			pPre = pCur;
@@ -49,8 +47,18 @@ public:
 		}
 		printf("\n");
 	}
+	~List()
+	{
+		Node* pCur = pHead;
+		while(pCur){
+			Node* pDel = pCur;
+			pCur = pCur->next;
+			delete pDel;
+		}
+	}
+
 	Node* head(){
-		return pHead->next;
+		return pHead;
 	}
 private:
 	Node* pHead;

@@ -1,16 +1,23 @@
 #include <stdio.h>
+#include <unistd.h>
 #include <string.h>
+#include <errno.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/epoll.h>
-
+#include "llist.h"
+#include "bitmap.h"
 #define DEBUG 1
-int first = 1;//判断是否是第一个连接的客户端
-int allConnect[1024] = {0};//记录当前所有的客户端套接字
-int idx = 0;//上个数组的索引
+
+List conList;
+Bitmap bmp;
+int playToRoom[10240] = {0};
+List* playerQue[10240] = {0};
+int idx = 1;
 
 /****为了反序列化消息，必须知道客户端的模型*****/
 #define Weight 10
@@ -30,6 +37,7 @@ struct shape {
 //客户端发送的消息
 struct message{
 	int types;//消息类型
+	int room;
 	struct shape nowShape;
 	struct data pos;
 	struct shape nextShape;	
@@ -65,12 +73,55 @@ int startup(int port)
 		perror("listen");
 		exit(4);
 	}
-
 	return sock;
 }
 
-void SolveCtl(struct message *msg);
-void SendPattern(int sock);
+void SolveCtl(struct message*  msg);
+int SolvePlayer(int epfd, int sock, int room){
+	if(bmp.exist(room)){
+		return -1;
+	}
+	bmp.set(room);
+	List* pl = new List;
+	playerQue[room] = &(*pl);
+	playToRoom[sock] = room;
+	printf("room%d被玩家%d创建\n", room, sock);
+	
+	struct epoll_event ev;
+	ev.events = EPOLLIN;
+	ev.data.fd = sock;
+	epoll_ctl(epfd, EPOLL_CTL_ADD, sock, &ev);
+	printf("设置关心room%d的%d玩家读事件\n", room, sock);
+	return 1;
+}
+
+int SolveViewer(int epfd, int sock, int room){
+	if(!bmp.exist(room)){
+		return -1;
+	}
+	List* pl = playerQue[room];
+	pl->push(sock);	
+	playToRoom[sock] = room;
+	printf("room%d加入新的观战者%d\n", room, sock);
+	//此时文件描述符还是读事件监听，需要删掉
+	struct epoll_event ev;
+	epoll_ctl(epfd, EPOLL_CTL_DEL,sock, &ev);
+	return 1;
+}
+void SolveData(int epfd, int room){
+	struct epoll_event ev;
+	Node* pCur= playerQue[room]->head();
+	pCur = pCur->next;
+	while(pCur){
+		ev.events = EPOLLOUT;
+		ev.data.fd = pCur->sock;
+		epoll_ctl(epfd, EPOLL_CTL_ADD,pCur->sock, &ev);
+		printf("设置关心room%d的%d观战者的写事件\n", room, pCur->sock);
+		pCur = pCur->next;
+	}
+}
+
+void SendPattern(int epfd, int sock);
 void handlerReadyEvents(int epfd, struct epoll_event revs[],\
 		int num, int listen_sock)
 {
@@ -88,76 +139,62 @@ void handlerReadyEvents(int epfd, struct epoll_event revs[],\
 				perror("accept");
 				continue;
 			}
-			printf("get a new client!\n");
-			//关心第一个客户端读事件，和所有连接上的客户的写事件
-			if(first){
-#ifdef DEBUG 
-				printf("第一个客户端上线\n");
-#endif
-				first = 0;
-				ev.events = EPOLLIN;
-				ev.data.fd = new_sock;
-				epoll_ctl(epfd, EPOLL_CTL_ADD, new_sock, &ev);
-				allConnect[idx++] = new_sock;
-			}
-			else{
-#ifdef DEBUG 
-				printf("第%d个客户端上线\n", idx+1);
-#endif
-				allConnect[idx++] = new_sock;
-			}
+			ev.events = EPOLLIN;
+			ev.data.fd = new_sock;
+			epoll_ctl(epfd, EPOLL_CTL_ADD, new_sock, &ev);
+			conList.push(new_sock);
+			printf("一个新客户端登录\n");
 		}
 		else if(events & EPOLLIN){
-			//第一个客户端的读事件
 			ssize_t s = read(sock, &msg, sizeof(msg));
-#ifdef DEBUG 
-			printf("第一个客户端收到控制信息\n");
-#endif
 			if(s > 0){
-				//处理定时信息和方向控制
 				SolveCtl(&msg);
-				//该给所有客户端发图案信息了
-				int i = 0;
-				while(allConnect[i] != 0){
-					ev.events = EPOLLOUT;
-					ev.data.fd = allConnect[i];
-					if(i == 0){
-						i++;
-						continue;
-					}
-					else{
-						epoll_ctl(epfd, EPOLL_CTL_ADD, allConnect[i], &ev);
-					}
-					i++;
-#ifdef DEBUG 
-					printf("设置关心第%d个客户端的写事件\n", i);
-#endif
-			}	
-#ifdef DEBUG 
-					printf("第一个客户端的继续读事件\n");
-#endif
-		}else if(s == 0){
-				printf("一号玩家退出游戏，game over\n");
-				int i = 0;
-				while(allConnect[i]!=0){
-					close(allConnect[i]);
+				//1 玩家 2 viewer 3 玩家的数据
+				switch(msg.types){
+					case 1:
+						if(-1 == SolvePlayer(epfd, sock, msg.room)){
+							printf("请求房间号已存在\n");
+							close(sock);			
+						}
+						break;
+					case 2:
+						if(-1 == SolveViewer(epfd, sock, msg.room)){
+							printf("没有这个直播间\n");
+							close(sock);
+						}
+						break;
+					case 3:
+						SolveData(epfd, msg.room);
+						break;
+					default:
+						break;
 				}
-				epoll_ctl(epfd, EPOLL_CTL_DEL, allConnect[0], NULL);
-			}else{
+			}else if(s == 0){
+				printf("%d号玩家退出游戏，room%d关闭\n", sock, playToRoom[sock]);
+				int room = playToRoom[sock];
+				List* pView = playerQue[room];
+				Node* pCur = playerQue[room]->head()->next;
+				while(pCur){
+					printf("停止关心room%d的%d观战者的写事件\n", room, pCur->sock);
+					epoll_ctl(epfd, EPOLL_CTL_DEL, pCur->sock, &ev);
+					close(pCur->sock);
+					Node* pDel = pCur;
+					pCur = pCur->next;
+					pView->del(pDel->sock);
+				}			
+				bmp.reset(playToRoom[sock]);
+				delete pView;
+				close(sock);
+			}
+			else{
 				perror("read");
 			}
 		}
 		else if(events & EPOLLOUT){
-			//写事件就绪的条件，是在第一个客户端读到信息之后	
 			//写事件给连接发图案信息	
-
-			SendPattern(sock);
-			//其他客户端停止关心写事件
-#ifdef DEBUG 
-				printf("一个观战客户端的写事件处理完毕，停止关心\n");
-#endif
-				epoll_ctl(epfd, EPOLL_CTL_DEL, sock, NULL);
-			
+			SendPattern(epfd, sock);
+			printf("%d观战客户端的写事件处理完毕，停止关心\n", sock);
+			epoll_ctl(epfd, EPOLL_CTL_DEL, sock, NULL);
 		}else{
 			//bug!
 		}
@@ -165,8 +202,7 @@ void handlerReadyEvents(int epfd, struct epoll_event revs[],\
 }
 
 //处理收到的客户端信息
-void SolveCtl(struct message * msg ){
-	
+void SolveCtl(struct message* msg ){
 #ifdef DEBUG 
 	printf("type: %d\n", msg->types);		
 	int i, j;
@@ -178,13 +214,21 @@ void SolveCtl(struct message * msg ){
 	}
 #endif 
 }
-void SendPattern(int sock){
-	write(sock ,&msg, sizeof(msg));	
-
-#ifdef DEBUG 
+void SendPattern(int epfd, int sock){
+	int ret = write(sock ,&msg, sizeof(msg));	
+	if(errno == EPIPE){
+		printf("写入客户端图案信息失败");
+		int room = playToRoom[sock];
+		List* pView = playerQue[room];
+		printf("关闭room%d, sock%d\n",room,  sock);
+		pView->del(sock);
+		epoll_ctl(epfd, EPOLL_CTL_DEL, sock, NULL);
+		close(sock);
+		return;
+	}
 	printf("写入客户端图案信息\n");
-#endif
 }
+
 int main(int argc, char *argv[])
 {
 	if(argc != 2){
@@ -199,11 +243,14 @@ int main(int argc, char *argv[])
 		return 5;
 	}
 
+	signal(SIGPIPE, SIG_IGN);
+
 	struct epoll_event ev;
 	ev.events = EPOLLIN;
 	ev.data.fd = listen_sock;
 	epoll_ctl(epfd, EPOLL_CTL_ADD, listen_sock, &ev);
 
+	//初始化连接链表
 	struct epoll_event revs[64];
 	for(;;){
 		int timeout = -1;

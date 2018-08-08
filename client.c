@@ -11,7 +11,7 @@
 #include "./keyboard/keyboard/keyboard.h"
 void game();
 int sock;
-
+int room;
 int main(int argc, char* argv[])
 {
 	if(argc != 3){
@@ -38,6 +38,9 @@ int main(int argc, char* argv[])
 	
 	printf("connect success\n");
 	//游戏主体
+	printf("输入你要直播的房间：");
+	scanf("%d", &room);
+
 	game();
 
 	close(sock);

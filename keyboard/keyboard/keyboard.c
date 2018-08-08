@@ -22,19 +22,23 @@ int init_keyboard(void)
 	if(ret < 0)
 		return -1;
 	tc = tcsave;
+	//设置本地终端模式为不回显，直接送入程序空间
 	tc.c_lflag &= ~(ECHO|ICANON);
 	ret = tcsetattr(0, TCSANOW, &tc);
 	if(ret < 0)
 		return -1;
+	//设置标准输入为非阻塞
 	flsave = fcntl(0, F_GETFL);
 	fcntl(0, F_SETFL, flsave|O_NONBLOCK);
 	return 0;
 }
+
 void recover_keyboard(void)
 {
 	tcsetattr(0, TCSANOW, &tcsave);
 	fcntl(0, F_SETFL, flsave);
 }
+
 int get_key(void)
 {	
 	unsigned char buf[3];

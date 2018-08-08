@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <errno.h>
 #include <time.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -34,9 +35,11 @@ struct shape {
 
 //在client里定义过了
 extern int  sock;
+extern int room;
 //给服务器发送的消息
 struct message{
 	int types;//消息类型
+	int room;
 	struct shape nowShape;
 	struct data pos;
 	struct shape nextShape;	
@@ -266,7 +269,8 @@ int  is_key(struct data *p)
 //定时下落发送，改变方向
 void SendMsg(){
 	struct message msg;
-	msg.types = 0;
+	msg.types = 3;
+	msg.room = room;
 	msg.pos = pos;
 	msg.nowShape = shape_arr[shapeNum];
 	msg.nextShape = shape_arr[nextBuf];
@@ -277,7 +281,11 @@ void SendMsg(){
 			msg.background[i][j] = background[i][j];
 		}
 	}
-	write(sock, &msg, sizeof(msg));
+	int ret = write(sock, &msg, sizeof(msg));
+	if(ret <= 0){
+		perror("write");
+		handler_int(0);
+	}
 }
 
 void handler(int s)
@@ -296,10 +304,27 @@ void handler_int(int s)
 	if(s == 1){
 		printf("客户端关闭连接\n");
 	}
+	else if(s == 0){
+		printf("服务端关闭连接\n");
+	}
+	fflush(stdout);
 	exit(0);
+}
+
+void SendRoom(){
+	struct message msg;
+	msg.types = 1;
+	msg.room = room;
+	int ret = write(sock, &msg, sizeof(msg));
+	if(ret <= 0){
+		perror("write");
+		handler_int(0);
+	}
 }
 void game()
 {
+	//首先构造发送一个建立room信息
+	SendRoom();	
 	srand((unsigned)time(NULL));
 	//注册ALRM信号，收到后执行定时下落
 	struct sigaction act;
@@ -309,6 +334,7 @@ void game()
 	sigaction(SIGALRM, &act, NULL);
 
 	signal(SIGINT, handler_int);
+	signal(SIGPIPE, handler_int);
 	signal(SIGQUIT, SIG_IGN);
 
 	//设置定器

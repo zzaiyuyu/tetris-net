@@ -38,10 +38,11 @@ struct shape {
 };
 
 //在client里定义过了
-extern int  sock;
+int  sock;
 //给服务器发送的消息
 struct message{
 	int types;//消息类型
+	int room;
 	struct shape nowShape;
 	struct data pos;
 	struct shape nextShape;	
@@ -129,16 +130,22 @@ void ShowMsg(struct message * msg ){
 	draw_shape(msg->pos.x, msg->pos.y, msg->nowShape ,FC);
 }
 
-void handler_int()
+void handler_int(int s)
 {
 	recover_keyboard();
 	//显示光标，恢复位置，清屏
 	printf("\033[?25h");
 	printf("\033[u");
 	printf("\033[2J");
+	fflush(stdout);
 	exit(0);
 }
-int sock;
+void SendRoom(int room){
+	struct message msg;
+	msg.types = 2;
+	msg.room = room;
+	write(sock, &msg, sizeof(msg));
+}
 int main(int argc, char* argv[])
 {
 	if(argc != 3){
@@ -161,9 +168,13 @@ int main(int argc, char* argv[])
 	}
 	//连接已建立
 	printf("connect success\n");
+	printf("请输入你要进入的房间号：\n");
+	int room;
+	scanf("%d", &room);
+	//发送请求房间信息
+	SendRoom(room);
 
 	signal(SIGINT, handler_int);
-
 	printf("\033[2J");
 	init_keyboard();
 	while(1){
@@ -175,9 +186,7 @@ int main(int argc, char* argv[])
 		}
 		if(readSize == 0){
 			printf("server close\n");
-			handler_int();
-			close(sock);
-			exit(4);
+			handler_int(0);
 		}
 		ShowMsg(&msg);
 	}

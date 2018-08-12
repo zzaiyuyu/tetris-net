@@ -347,7 +347,7 @@ void game()
 	//获取按键
 	printf("\033[2J");
 	init_keyboard();
-	printf("操控按键:\n");
+	draw_bk();
 	while(1){
 		is_key(&pos); 
 	}

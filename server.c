@@ -184,6 +184,7 @@ void handlerReadyEvents(int epfd, struct epoll_event revs[],\
 				}			
 				bmp.reset(playToRoom[sock]);
 				delete pView;
+				playerQue[room] = NULL;
 				close(sock);
 			}
 			else{
@@ -238,6 +239,7 @@ int main(int argc, char *argv[])
 
 	int listen_sock = startup(atoi(argv[1]));
 	int epfd = epoll_create(256);
+	printf("listen...\n");
 	if(epfd < 0){
 		printf("epoll_create error!\n");
 		return 5;

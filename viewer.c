@@ -173,7 +173,15 @@ int main(int argc, char* argv[])
 	scanf("%d", &room);
 	//发送请求房间信息
 	SendRoom(room);
-
+	struct message msg;
+	int readSize = read(sock, &msg, sizeof(msg));	
+	if(readSize == 0){
+		printf("房间不存在，请重新输入房号!\n");
+		return 4;
+	}
+	else{
+		printf("房间存在，正在进入直播间...\n");
+	}
 	signal(SIGINT, handler_int);
 	printf("\033[2J");
 	init_keyboard();
